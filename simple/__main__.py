@@ -189,6 +189,15 @@ if __name__ == '__main__':
     parser.add_argument('--use-ppo-lr-decay', default=False, action='store_true')
     parser.add_argument('--use-stochastic-model', default=True, action='store_false')
     parser.add_argument('--use-wandb', default=False, action='store_true')
+
+    parser.add_argument('--use-adaptive-ground-truth-ref', default=False)
+    # when last_loss < 10% quantile of the recent 100 losses -> use the generated frame
+    parser.add_argument('--adaptive-ground-truth-quantile', type=float, default=0.1)
+    # first 1000 iterations -> use ground truth
+    parser.add_argument('--adaptive-ground-truth-force-ref-time', type=int, default=1000)
+    # take the recent 100 to evaluate the generated frame
+    parser.add_argument('--recent-losses-window-size', type=int, default=100)
+    
     config = parser.parse_args()
 
     print_config(config)

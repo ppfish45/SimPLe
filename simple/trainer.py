@@ -9,6 +9,7 @@ from tqdm import trange
 from atari_utils.logger import WandBLogger
 from simple.adafactor import Adafactor
 
+import numpy as np
 
 class Trainer:
 
@@ -23,7 +24,23 @@ class Trainer:
 
         self.model_step = 1
         self.reward_step = 1
+        
+        # for adaptive ground truth ref
+        self.ground_truth_ref_count = 0
+        self.recent_losses = []
 
+    def use_ground_truth(self, last_loss):
+
+        res = self.ground_truth_ref_count > self.config.adaptive_ground_truth_force_ref_time \
+            and len(self.recent_losses) == self.config.recent_losses_window_size \
+            and last_loss < np.quantile(self.recent_losses, self.config.adaptive_ground_truth_quantile)
+            
+        self.recent_losses.append(last_loss)
+        if len(self.recent_losses) > self.config.recent_losses_window_size:
+            self.recent_losses = self.recent_losses[-self.config.recent_losses_window_size: ]
+        
+        return res
+            
     def train(self, epoch, env, steps=15000):
         if epoch == 0:
             steps *= 3
@@ -85,6 +102,7 @@ class Trainer:
                 epsilon = 1 - epsilon
             else:
                 epsilon = 0
+                
 
             indices = get_indices()
             frames = torch.empty((self.config.batch_size, c * self.config.stacking, h, w))
@@ -122,15 +140,6 @@ class Trainer:
                 self.model.train()
                 frames_pred, reward_pred, values_pred = self.model(frames, actions, new_states_input, epsilon)
 
-                if j < rollout_len - 1:
-                    for k in range(self.config.batch_size):
-                        if float(torch.rand((1,))) < epsilon:
-                            frame = new_states[k]
-                        else:
-                            frame = torch.argmax(frames_pred[k], dim=0)
-                        frame = preprocess_state(frame)
-                        frames[k] = torch.cat((frames[k, c:], frame), dim=0)
-
                 loss_reconstruct = nn.CrossEntropyLoss(reduction='none')(frames_pred, new_states)
                 clip = torch.tensor(self.config.target_loss_clipping).to(self.config.device)
                 loss_reconstruct = torch.max(loss_reconstruct, clip)
@@ -152,6 +161,25 @@ class Trainer:
                 if self.config.use_stochastic_model:
                     tab.append(float(loss_lstm))
                 losses[j] = torch.tensor(tab)
+
+                if j < rollout_len - 1:
+                    for k in range(self.config.batch_size):
+                        frame = None
+
+                        if not self.config.use_adaptive_ground_truth_ref:
+                            if float(torch.rand((1,))) < epsilon:
+                                frame = new_states[k]
+                            else:
+                                frame = torch.argmax(frames_pred[k], dim=0)
+                        else:
+                            # improved adaptive reference
+                            if self.use_ground_truth(loss_reconstruct):
+                                frame = new_states[k]
+                            else:
+                                frame = torch.argmax(frames_pred[k], dim=0)
+
+                        frame = preprocess_state(frame)
+                        frames[k] = torch.cat((frames[k, c:], frame), dim=0)
 
             losses = torch.mean(losses, dim=0)
             metrics = {
