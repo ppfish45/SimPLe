@@ -31,7 +31,7 @@ class Trainer:
 
     def use_ground_truth(self, last_loss):
 
-        res = self.ground_truth_ref_count > self.config.adaptive_ground_truth_force_ref_time \
+        use_pred = self.ground_truth_ref_count > self.config.adaptive_ground_truth_force_ref_time \
             and len(self.recent_losses) == self.config.recent_losses_window_size \
             and last_loss < np.quantile(self.recent_losses, self.config.adaptive_ground_truth_quantile)
             
@@ -39,7 +39,7 @@ class Trainer:
         if len(self.recent_losses) > self.config.recent_losses_window_size:
             self.recent_losses = self.recent_losses[-self.config.recent_losses_window_size: ]
         
-        return res
+        return not use_pred
             
     def train(self, epoch, env, steps=15000):
         if epoch == 0:
@@ -169,12 +169,14 @@ class Trainer:
                         if not self.config.use_adaptive_ground_truth_ref:
                             if float(torch.rand((1,))) < epsilon:
                                 frame = new_states[k]
+                                self.ground_truth_ref_count += 1
                             else:
                                 frame = torch.argmax(frames_pred[k], dim=0)
                         else:
                             # improved adaptive reference
-                            if self.use_ground_truth(loss_reconstruct):
+                            if self.use_ground_truth(float(loss_reconstruct)):
                                 frame = new_states[k]
+                                self.ground_truth_ref_count += 1
                             else:
                                 frame = torch.argmax(frames_pred[k], dim=0)
 
@@ -186,7 +188,8 @@ class Trainer:
                 'loss': float(losses[0]),
                 'loss_reconstruct': float(losses[1]),
                 'loss_value': float(losses[2]),
-                'loss_reward': float(losses[3])
+                'loss_reward': float(losses[3]),
+                "ground_truth_ref_count": self.ground_truth_ref_count,
             }
             if self.config.use_stochastic_model:
                 metrics.update({'loss_lstm': float(losses[4])})
